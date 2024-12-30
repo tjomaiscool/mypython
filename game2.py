@@ -85,15 +85,16 @@ class FallingBallGame(arcade.Window):
         elif key == arcade.key.A:
             self.move_left = False
 
-    def reset_falling_ball(self):
-        # Reset the falling ball to the top at a random x position
-        self.falling_ball_x = random.randint(FALLING_BALL_RADIUS, SCREEN_WIDTH - FALLING_BALL_RADIUS)
-        self.falling_ball_y = SCREEN_HEIGHT
 
     def check_collision(self):
         # Check if the falling ball overlaps the controlled ball
         return (abs(self.falling_ball_x - self.controlled_ball_x) < FALLING_BALL_RADIUS + CONTROLLED_BALL_RADIUS and
                 abs(self.falling_ball_y - self.controlled_ball_y) < FALLING_BALL_RADIUS + CONTROLLED_BALL_RADIUS)
+
+    def reset_falling_ball(self):
+        # Reset the falling ball to the top at a random x position
+        self.falling_ball_x = random.randint(FALLING_BALL_RADIUS, SCREEN_WIDTH - FALLING_BALL_RADIUS)
+        self.falling_ball_y = SCREEN_HEIGHT
 
 
 def main():
