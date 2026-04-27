@@ -1,0 +1,2 @@
+highscore 18
+difficulty 2
