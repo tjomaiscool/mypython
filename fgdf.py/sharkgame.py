@@ -6,135 +6,136 @@ pygame.init()
 # ===============================================================
 # SETUP
 # ===============================================================
+
 WIDTH, HEIGHT = 1200, 700
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Infinite Shark Scroller (Fixed)")
+pygame.display.set_caption("Infinite Shark Scroller")
 
 clock = pygame.time.Clock()
 
-# ===============================================================
-# COLORS
-# ===============================================================
-BLUE  = (0, 105, 148)
+# Colors
+BLUE = (0, 105, 148)
 WHITE = (255, 255, 255)
-RED   = (200, 50, 50)
+RED = (200, 50, 50)
 BROWN = (139, 69, 19)
-BLACK = (0, 0, 0)
 GREEN = (0, 255, 0)
+BLACK = (0, 0, 0)
 
 font = pygame.font.SysFont(None, 40)
 
-# ===============================================================
-# SETTINGS
-# ===============================================================
+# Physics
 GRAVITY = 0.6
 JUMP_POWER = -13
-SCROLL_SPEED = 6
-
-MIN_GAP = 200
-MAX_GAP = 280
-
-MIN_Y = 350
-MAX_Y = 520
-
-GEN_BUFFER = 1600
-
+SCROLL_SPEED = 10    # ← BASE SPEED (per 60 FPS)
 
 # ===============================================================
-# SHARK
+# SHARK — Jump buffer + coyote time + continuous collision
 # ===============================================================
+
 class Shark:
     def __init__(self):
         self.rect = pygame.Rect(250, 300, 50, 30)
         self.vel_y = 0
-
         self.on_ground = False
-        self.coyote = 0
+
+        # Helpers
+        self.coyote_timer = 0
         self.jump_buffer = 0
 
-    def handle_input(self, events):
-        for e in events:
-            if e.type == pygame.KEYDOWN and e.key == pygame.K_SPACE:
-                self.jump_buffer = 0.12
+    def press_jump(self):
+        self.jump_buffer = 0.15  # buffered jump
 
-    def apply_physics(self):
-        self.vel_y += GRAVITY
-        self.rect.y += self.vel_y
+    def update(self, platforms, jump_pads, dt):
+        # Apply gravity
+        self.vel_y += GRAVITY * dt
 
-        if self.coyote > 0:
-            self.coyote -= 1/60
+        # Update timers
+        if self.coyote_timer > 0:
+            self.coyote_timer -= dt
         if self.jump_buffer > 0:
-            self.jump_buffer -= 1/60
+            self.jump_buffer -= dt
 
-        if self.jump_buffer > 0 and self.coyote > 0:
-            self.vel_y = JUMP_POWER
-            self.jump_buffer = 0
-            self.coyote = 0
+        # Vertical movement split into steps
+        steps = max(1, int(abs(self.vel_y)))
+        step = self.vel_y / steps
 
-    def collide_platforms(self, platforms):
         self.on_ground = False
 
-        for p in platforms:
-            if self.rect.colliderect(p.rect) and self.vel_y > 0:
-                self.rect.bottom = p.rect.top
-                self.vel_y = 0
-                self.on_ground = True
+        for _ in range(steps):
+            self.rect.y += step
 
-        if self.on_ground:
-            self.coyote = 0.12
+            # PLATFORM COLLISION
+            for p in platforms:
+                if self.rect.colliderect(p.rect) and step > 0:
+                    self.rect.bottom = p.rect.top
+                    self.vel_y = 0
+                    self.on_ground = True
+                    self.coyote_timer = 0.15
+                    break
 
-    def collide_jump_pads(self, jump_pads):
-        for jp in jump_pads:
-            if self.rect.colliderect(jp.rect) and self.vel_y > 0:
-                if self.rect.bottom - self.vel_y <= jp.rect.top:
+            # JUMP PAD COLLISION
+            for jp in jump_pads:
+                if (
+                    self.rect.colliderect(jp.rect)
+                    and step > 0
+                    and self.rect.bottom <= jp.rect.top + 12
+                ):
                     self.rect.bottom = jp.rect.top
                     self.vel_y = JUMP_POWER * 1.8
-                    self.coyote = 0
+                    self.on_ground = False
+                    self.coyote_timer = 0
                     self.jump_buffer = 0
+                    return  # exit early; giant boost
+
+        # EXECUTE JUMP IF POSSIBLE
+        if self.jump_buffer > 0 and self.coyote_timer > 0:
+            self.vel_y = JUMP_POWER
+            self.jump_buffer = 0
+            self.coyote_timer = 0
 
     def draw(self):
         pygame.draw.rect(screen, WHITE, self.rect)
 
+# ===============================================================
+# OBJECTS
+# ===============================================================
 
-# ===============================================================
-# WORLD OBJECTS
-# ===============================================================
 class Platform:
     def __init__(self, x, y, w):
         self.rect = pygame.Rect(x, y, w, 20)
 
-    def update(self):
-        self.rect.x -= SCROLL_SPEED
+    def update(self, dt):
+        self.rect.x -= SCROLL_SPEED * dt
 
     def draw(self):
         pygame.draw.rect(screen, BROWN, self.rect)
-
-
-class Human:
-    def __init__(self, x, y):
-        self.rect = pygame.Rect(x, y, 20, 30)
-
-    def update(self):
-        self.rect.x -= SCROLL_SPEED
-
-    def draw(self):
-        pygame.draw.rect(screen, RED, self.rect)
 
 
 class JumpPad:
     def __init__(self, x, y, w):
         self.rect = pygame.Rect(x, y, w, 20)
 
-    def update(self):
-        self.rect.x -= SCROLL_SPEED
+    def update(self, dt):
+        self.rect.x -= SCROLL_SPEED * dt
 
     def draw(self):
         pygame.draw.rect(screen, GREEN, self.rect)
 
 
+class Human:
+    def __init__(self, x, y):
+        self.rect = pygame.Rect(x, y, 20, 30)
+
+    def update(self, dt):
+        self.rect.x -= SCROLL_SPEED * dt
+
+    def draw(self):
+        pygame.draw.rect(screen, RED, self.rect)
+
 # ===============================================================
-# WORLD
+# WORLD — Fake delta-time + stable generation
 # ===============================================================
+
 class World:
     def __init__(self):
         self.platforms = []
@@ -146,122 +147,114 @@ class World:
         self.last_x = 200
         self.last_y = 450
 
-        self.generation_buffer = 1600
+        # Start base platform
+        self.platforms.append(Platform(200, 450, 250))
 
-        # starting platform (guaranteed safe)
-        self.platforms.append(Platform(self.last_x, self.last_y, 200))
-
-        for _ in range(8):
+        # Pre-generate
+        for _ in range(10):
             self.spawn()
 
-    # -----------------------------------------------------------
     def spawn(self):
-
-        gap = random.randint(200, 260)
+        # Basic platform spacing
+        gap = random.randint(260, 360)
         x = self.last_x + gap
+        y = self.last_y + random.randint(-40, 40)
+        y = max(320, min(560, y))
+        w = random.randint(140, 200)
 
-        y = self.last_y + random.randint(-30, 30)
-        y = max(350, min(520, y))
+        roll = random.random()
 
-        w = random.randint(150, 200)
-
-        # decide type
-        if random.random() < 0.22:
+        if roll < 0.25:
+            # Jump pad
             self.jump_pads.append(JumpPad(x, y, w))
-        else:
-            self.platforms.append(Platform(x, y, w))
 
-            if random.random() < 0.5:
+            # NEXT PLATFORM must be safe
+            safe_gap = random.randint(240, 300)
+            nx = x + w + safe_gap
+            ny = y + random.randint(-30, 30)
+            ny = max(320, min(560, ny))
+            nw = random.randint(280, 340)
+
+            self.platforms.append(Platform(nx, ny, nw))
+            self.last_x = nx + nw
+            self.last_y = ny
+
+        else:
+            # Normal platform
+            self.platforms.append(Platform(x, y, w))
+            if random.random() < 0.4:
                 self.humans.append(Human(x + 40, y - 30))
 
-        self.last_x = x + w
-        self.last_y = y
+            self.last_x = x + w
+            self.last_y = y
 
-    # -----------------------------------------------------------
-    def update(self):
-
-        # move everything
+    def update(self, dt):
+        # Scroll all objects
         for p in self.platforms:
-            p.update()
-
+            p.update(dt)
         for jp in self.jump_pads:
-            jp.update()
-
+            jp.update(dt)
         for h in self.humans:
-            h.update()
+            h.update(dt)
 
-        # cleanup
-        self.platforms = [p for p in self.platforms if p.rect.right > -200]
-        self.jump_pads = [jp for jp in self.jump_pads if jp.rect.right > -200]
-        self.humans = [h for h in self.humans if h.rect.right > -200]
+        # Cleanup
+        self.platforms = [p for p in self.platforms if p.rect.right > -500]
+        self.jump_pads = [jp for jp in self.jump_pads if jp.rect.right > -500]
+        self.humans = [h for h in self.humans if h.rect.right > -500]
 
-        # -------------------------------------------------------
-        # FIX 1: SAFE GENERATION (NO LOOP DEADLOCK)
-        # -------------------------------------------------------
-        # Instead of recomputing furthest, we use last_x ONLY
-        while self.last_x < self.generation_buffer:
+        # Generate forward
+        camera_right = 250 + WIDTH
+        while self.last_x < camera_right + 900:
             self.spawn()
 
-        # -------------------------------------------------------
-        # SAFETY: prevent empty world collapse
-        # -------------------------------------------------------
-        if len(self.platforms) < 3:
-            for _ in range(3):
+        # Safety platforms
+        if len(self.platforms) < 5:
+            for _ in range(5):
                 self.spawn()
 
-    # -----------------------------------------------------------
     def check_eating(self, shark):
         for h in self.humans[:]:
             if shark.rect.colliderect(h.rect):
                 self.humans.remove(h)
                 self.score += 1
 
-    # -----------------------------------------------------------
     def draw(self):
-
         for p in self.platforms:
             p.draw()
-
         for jp in self.jump_pads:
             jp.draw()
-
         for h in self.humans:
             h.draw()
 
-        txt = font.render(f"Score: {self.score}", True, WHITE)
-        screen.blit(txt, (20, 20))
-
+        # Score
+        t = font.render(f"Score: {self.score}", True, WHITE)
+        screen.blit(t, (20, 20))
 
 # ===============================================================
 # GAME LOOP
 # ===============================================================
+
 shark = Shark()
 world = World()
 
+running = True
 game_over = False
 
-running = True
 while running:
-
-    clock.tick(60)
-    events = pygame.event.get()
-
-    for e in events:
-        if e.type == pygame.QUIT:
-            running = False
+    dt = clock.tick(60) / 16.666   # FAKE DELTA (1.0 = 60 FPS)
 
     keys = pygame.key.get_pressed()
 
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            shark.press_jump()
+
     if not game_over:
-
-        shark.handle_input(events)
-        shark.apply_physics()
-
-        shark.collide_platforms(world.platforms)
-        shark.collide_jump_pads(world.jump_pads)
-
+        shark.update(world.platforms, world.jump_pads, dt)
+        world.update(dt)
         world.check_eating(shark)
-        world.update()
 
         if shark.rect.top > HEIGHT:
             game_over = True
@@ -271,17 +264,16 @@ while running:
         shark.draw()
 
     else:
-
         screen.fill(BLACK)
 
         over = font.render("GAME OVER", True, WHITE)
         screen.blit(over, (520, 300))
 
-        score = font.render(f"Final Score: {world.score}", True, WHITE)
-        screen.blit(score, (500, 360))
+        final_score = font.render(f"Final Score: {world.score}", True, WHITE)
+        screen.blit(final_score, (500, 350))
 
-        restart = font.render("Press R to restart", True, WHITE)
-        screen.blit(restart, (450, 420))
+        restart = font.render("Press R to Restart", True, WHITE)
+        screen.blit(restart, (460, 400))
 
         if keys[pygame.K_r]:
             shark = Shark()
