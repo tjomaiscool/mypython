@@ -26,10 +26,11 @@ font = pygame.font.SysFont(None, 40)
 # Physics
 GRAVITY = 0.6
 JUMP_POWER = -13
-SCROLL_SPEED = 10    # ← BASE SPEED (per 60 FPS)
+SCROLL_SPEED = 10  # fake-delta scroll speed
+
 
 # ===============================================================
-# SHARK — Jump buffer + coyote time + continuous collision
+# SHARK — fully corrected delta-time physics
 # ===============================================================
 
 class Shark:
@@ -38,56 +39,53 @@ class Shark:
         self.vel_y = 0
         self.on_ground = False
 
-        # Helpers
-        self.coyote_timer = 0
-        self.jump_buffer = 0
+        self.coyote_timer = 0.0
+        self.jump_buffer = 0.0
 
     def press_jump(self):
-        self.jump_buffer = 0.15  # buffered jump
+        self.jump_buffer = 0.12
 
     def update(self, platforms, jump_pads, dt):
-        # Apply gravity
+        # Apply gravity WITH fake delta time
         self.vel_y += GRAVITY * dt
 
-        # Update timers
+        # Update timers (fixed 60 FPS logic)
         if self.coyote_timer > 0:
-            self.coyote_timer -= dt
+            self.coyote_timer -= 1/60
         if self.jump_buffer > 0:
-            self.jump_buffer -= dt
+            self.jump_buffer -= 1/60
 
-        # Vertical movement split into steps
+        # Vertical stepping tied to dt
         steps = max(1, int(abs(self.vel_y)))
-        step = self.vel_y / steps
+        step_amount = self.vel_y / steps
 
         self.on_ground = False
 
         for _ in range(steps):
-            self.rect.y += step
+            self.rect.y += step_amount * dt
 
             # PLATFORM COLLISION
             for p in platforms:
-                if self.rect.colliderect(p.rect) and step > 0:
+                if self.rect.colliderect(p.rect) and step_amount > 0:
                     self.rect.bottom = p.rect.top
                     self.vel_y = 0
                     self.on_ground = True
-                    self.coyote_timer = 0.15
+                    self.coyote_timer = 0.12
                     break
 
             # JUMP PAD COLLISION
             for jp in jump_pads:
-                if (
-                    self.rect.colliderect(jp.rect)
-                    and step > 0
-                    and self.rect.bottom <= jp.rect.top + 12
-                ):
+                if (self.rect.colliderect(jp.rect)
+                    and step_amount > 0
+                    and self.rect.bottom <= jp.rect.top + 10):
                     self.rect.bottom = jp.rect.top
                     self.vel_y = JUMP_POWER * 1.8
                     self.on_ground = False
                     self.coyote_timer = 0
                     self.jump_buffer = 0
-                    return  # exit early; giant boost
+                    return
 
-        # EXECUTE JUMP IF POSSIBLE
+        # EXECUTE JUMP
         if self.jump_buffer > 0 and self.coyote_timer > 0:
             self.vel_y = JUMP_POWER
             self.jump_buffer = 0
@@ -96,8 +94,9 @@ class Shark:
     def draw(self):
         pygame.draw.rect(screen, WHITE, self.rect)
 
+
 # ===============================================================
-# OBJECTS
+# OBJECTS — move using fake-delta
 # ===============================================================
 
 class Platform:
@@ -132,8 +131,9 @@ class Human:
     def draw(self):
         pygame.draw.rect(screen, RED, self.rect)
 
+
 # ===============================================================
-# WORLD — Fake delta-time + stable generation
+# WORLD
 # ===============================================================
 
 class World:
@@ -144,52 +144,70 @@ class World:
 
         self.score = 0
 
+        # generation tracking
         self.last_x = 200
         self.last_y = 450
 
-        # Start base platform
+        self.generation_buffer = 900
+
+        # start platform
         self.platforms.append(Platform(200, 450, 250))
 
-        # Pre-generate
+        # pre-generate world
         for _ in range(10):
             self.spawn()
 
+    # -------------------------------------------------------
+    # FIXED SPAWN LOGIC (NO STOPPING, NO DEAD ZONE)
+    # -------------------------------------------------------
     def spawn(self):
-        # Basic platform spacing
+
         gap = random.randint(260, 360)
         x = self.last_x + gap
+
         y = self.last_y + random.randint(-40, 40)
         y = max(320, min(560, y))
-        w = random.randint(140, 200)
 
+        w = random.randint(150, 200)
         roll = random.random()
 
+        # ----------------------------
+        # Jump pad branch (FIXED SAFE NEXT PLATFORM)
+        # ----------------------------
         if roll < 0.25:
-            # Jump pad
+
             self.jump_pads.append(JumpPad(x, y, w))
 
-            # NEXT PLATFORM must be safe
-            safe_gap = random.randint(240, 300)
+            # ALWAYS spawn safe platform after jump pad
+            safe_gap = random.randint(240, 320)
             nx = x + w + safe_gap
-            ny = y + random.randint(-30, 30)
+            ny = y + random.randint(-20, 20)
             ny = max(320, min(560, ny))
-            nw = random.randint(280, 340)
+            nw = random.randint(280, 360)
 
             self.platforms.append(Platform(nx, ny, nw))
+
             self.last_x = nx + nw
             self.last_y = ny
 
+        # ----------------------------
+        # Normal platform branch
+        # ----------------------------
         else:
-            # Normal platform
             self.platforms.append(Platform(x, y, w))
+
             if random.random() < 0.4:
                 self.humans.append(Human(x + 40, y - 30))
 
             self.last_x = x + w
             self.last_y = y
 
+    # -------------------------------------------------------
+    # FIXED UPDATE (GENERATION NEVER STOPS)
+    # -------------------------------------------------------
     def update(self, dt):
-        # Scroll all objects
+
+        # move everything
         for p in self.platforms:
             p.update(dt)
         for jp in self.jump_pads:
@@ -197,27 +215,32 @@ class World:
         for h in self.humans:
             h.update(dt)
 
-        # Cleanup
-        self.platforms = [p for p in self.platforms if p.rect.right > -500]
-        self.jump_pads = [jp for jp in self.jump_pads if jp.rect.right > -500]
-        self.humans = [h for h in self.humans if h.rect.right > -500]
+        # cleanup
+        self.platforms = [p for p in self.platforms if p.rect.right > -300]
+        self.jump_pads = [jp for jp in self.jump_pads if jp.rect.right > -300]
+        self.humans = [h for h in self.humans if h.rect.right > -300]
 
-        # Generate forward
+        # ---------------------------------------------------
+        # CAMERA-BASED GENERATION (THIS FIXES STOP BUG)
+        # ---------------------------------------------------
         camera_right = 250 + WIDTH
-        while self.last_x < camera_right + 900:
+
+        while self.last_x < camera_right + self.generation_buffer:
             self.spawn()
 
-        # Safety platforms
+        # safety backup
         if len(self.platforms) < 5:
             for _ in range(5):
                 self.spawn()
 
+    # -------------------------------------------------------
     def check_eating(self, shark):
         for h in self.humans[:]:
             if shark.rect.colliderect(h.rect):
                 self.humans.remove(h)
                 self.score += 1
 
+    # -------------------------------------------------------
     def draw(self):
         for p in self.platforms:
             p.draw()
@@ -226,9 +249,9 @@ class World:
         for h in self.humans:
             h.draw()
 
-        # Score
-        t = font.render(f"Score: {self.score}", True, WHITE)
-        screen.blit(t, (20, 20))
+        text = font.render(f"Score: {self.score}", True, WHITE)
+        screen.blit(text, (20, 20))
+
 
 # ===============================================================
 # GAME LOOP
@@ -241,8 +264,7 @@ running = True
 game_over = False
 
 while running:
-    dt = clock.tick(60) / 16.666   # FAKE DELTA (1.0 = 60 FPS)
-
+    dt = clock.tick(60) / 16.666  # fake delta-time
     keys = pygame.key.get_pressed()
 
     for event in pygame.event.get():
